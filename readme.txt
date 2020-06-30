@@ -4,3 +4,4 @@ Git is free software.
 Creating a new branch is quick and simple.
 We will test branch and conflict fix function.
 This is a test of bug branch.
+We are doing some work...

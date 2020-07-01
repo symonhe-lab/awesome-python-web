@@ -1,7 +1,2 @@
 Hello, git!
-Git is a didtributed version control system.
-Git is a free software.
-Creating a new branch is quick and simple.
-We will test branch and conflict fix function.
-This is a test of bug branch.
-We are doing some work...
+This is an awesome python website project, start at 2020-07-01, wish world better with it!

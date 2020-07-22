@@ -3,58 +3,68 @@ import asyncio
 import aiomysql
 
 def log(sql, args=()):
-    logging.info('SQL: %s' % sql)
+    logging.info('SQL: %s %s' % (sql, args))
 
+# asyncio function, create a public mysql connect pool
+# parm user, password, db, loop must needed
 async def create_pool(loop, **kw):
     logging.info('create database connection pool...')
-    global __pool
+    global __pool   # this is a global variable
     __pool = await aiomysql.create_pool(
-        host=kw.get('host', 'localhost'),
-        port=kw.get('port', 3306),
-        user=kw['user'],
-        password=kw['password'],
-        db=kw['db'],
-        charset=kw.get('charset', 'utf8'),
-        autocommit=kw.get('autocommit', True),
+        host=kw.get('host', 'localhost'),       # host, if don't exist then use localhost
+        port=kw.get('port', 3306),              # MySql port
+        user=kw['user'],                        # username
+        password=kw['password'],                # password
+        db=kw['db'],                            # database
+        charset=kw.get('charset', 'utf8'),      # charset
+        autocommit=kw.get('autocommit', True),  # autocommit mode
         maxsize=kw.get('maxsize', 10),
         minsize=kw.get('minsize', 1),
-        loop=loop
+        loop=loop                               # asyncio event loop instance
     )
 
+# asyncio function, run mysql SELECT command
 async def select(sql, args, size=None):
     log(sql, args)
     global __pool
-    with (await __pool) as conn:
-        cur = await conn.cursor(aiomysql.DictCursor)
-        await cur.execute(sql.replace('?', '%s'), args or ())
-        if size:
-            rs = await cur.fetchmany(size)
-        else:
-            rs = await cur.fetchall()
-        await cur.close()
+    async with __pool.get() as conn:
+        # create dict cursor, which returns results as a dictionary
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute(sql.replace('?', '%s'), args or ())
+            if size:
+                rs = await cur.fetchmany(size)
+            else:
+                rs = await cur.fetchall()
         logging.info('rows returned: %s' % len(rs))
         return rs
 
-async def execute(sql, args):
-    log(sql)
-    with (await __pool) as conn:
+# asyncio function, run mysql INSERT, UPDATE, DELETE
+async def execute(sql, args, autocommit=True):
+    log(sql, args)
+    async with __pool.get() as conn:
+        if not autocommit:
+            await conn.begin()
         try:
-            cur = await conn.cursor()
-            await cur.execute(sql.replace('?', '%s'), args)
-            affected = cur.rowcount
-            await cur.close()
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute(sql.replace('?', '%s'), args)
+                affected = cur.rowcount
+            if not autocommit:
+                await conn.commit()
         except BaseException as e:
+            if not autocommit:
+                await conn.rollback()
             raise
         return affected
 
+# create and return str as '?, ?, ?', count and length according to parm num
 def create_args_string(num):
     L = []
     for n in range(num):
         L.append('?')
     return ', '.join(L)
 
+# Base attribute class of Model class
 class Field(object):
-
     def __init__(self, name, column_type, primary_key, default):
         self.name = name
         self.column_type = column_type
@@ -65,29 +75,45 @@ class Field(object):
         return '<%s, %s:%s>' % (self.__class__.__name__, self.column_type, self.name)
 
 class StringField(Field):
+    def __init__(self, name=None, primary_key=False, default=None, column_type='VARCHAR(100)'):
+        super().__init__(name, column_type, primary_key, default)
 
-    def __init__(self, name=None, primary_key=False, default=None, ddl='varchar(100)'):
-        super().__init__(name, ddl, primary_key, default)
+class BooleanField(Field):
+    def __init__(self, name=None, primary_key=False, default=False, column_type='BOOLEAN'):
+        super().__init__(name, column_type, primary_key, default)
 
+class IntegerField(Field):
+    def __init__(self, name=None, primary_key=False, default=0, column_type='BIGINT'):
+        super().__init__(name, column_type, primary_key, default)
+
+class FloatField(Field):
+    def __init__(self, name=None, primary_key=False, default=0.0, column_type='REAL'):
+        super().__init__(name, column_type, primary_key, default)
+
+class TextField(Field):
+    def __init__(self, name=None, primary_key=False, default=None, column_type='TEXT'):
+        super().__init__(name, column_type, primary_key, default)
+
+# metaclass
 class ModelMetaclass(type):
-
     def __new__(cls, name, bases, attrs):
-        # 排除Model类本身:
+        # exclude Model class, we will not change base class
         if name=='Model':
             return type.__new__(cls, name, bases, attrs)
-        # 获取table名称:
+        # get table name, this is the mysql table name in pointed database, if not this attribute, use class name
         tableName = attrs.get('__table__', None) or name
-        logging.info('found model: %s (table: %s)' % (name, tableName))
-        # 获取所有的Field和主键名:
+        logging.info(' Found model: %s (table: %s)' % (name, tableName))
+
+        # get all Field and primary key
         mappings = dict()
         fields = []
         primaryKey = None
         for k, v in attrs.items():
             if isinstance(v, Field):
-                logging.info('  found mapping: %s ==> %s' % (k, v))
+                logging.info(' Found mapping: %s ==> %s' % (k, v))
                 mappings[k] = v
                 if v.primary_key:
-                    # 找到主键:
+                    # find primary key
                     if primaryKey:
                         raise RuntimeError('Duplicate primary key for field: %s' % k)
                     primaryKey = k
@@ -95,22 +121,25 @@ class ModelMetaclass(type):
                     fields.append(k)
         if not primaryKey:
             raise RuntimeError('Primary key not found.')
+
+        # remove all Field attribute in class
         for k in mappings.keys():
             attrs.pop(k)
+
         escaped_fields = list(map(lambda f: '`%s`' % f, fields))
-        attrs['__mappings__'] = mappings # 保存属性和列的映射关系
+        attrs['__mappings__'] = mappings        # attribute relation mapping
         attrs['__table__'] = tableName
-        attrs['__primary_key__'] = primaryKey # 主键属性名
-        attrs['__fields__'] = fields # 除主键外的属性名
-        # 构造默认的SELECT, INSERT, UPDATE和DELETE语句:
-        attrs['__select__'] = 'select `%s`, %s from `%s`' % (primaryKey, ', '.join(escaped_fields), tableName)
-        attrs['__insert__'] = 'insert into `%s` (%s, `%s`) values (%s)' % (tableName, ', '.join(escaped_fields), primaryKey, create_args_string(len(escaped_fields) + 1))
-        attrs['__update__'] = 'update `%s` set %s where `%s`=?' % (tableName, ', '.join(map(lambda f: '`%s`=?' % (mappings.get(f).name or f), fields)), primaryKey)
-        attrs['__delete__'] = 'delete from `%s` where `%s`=?' % (tableName, primaryKey)
+        attrs['__primary_key__'] = primaryKey   # primary key
+        attrs['__fields__'] = fields            # other attribute except for primary key
+        # default mysql command: SELECT, INSERT, UPDATE and DELETE
+        attrs['__select__'] = 'SELECT `%s`, %s FROM `%s`' % (primaryKey, ', '.join(escaped_fields), tableName)
+        attrs['__insert__'] = 'INSERT INTO `%s` (%s, `%s`) VALUES (%s)' % (tableName, ', '.join(escaped_fields), primaryKey, create_args_string(len(escaped_fields) + 1))
+        attrs['__update__'] = 'UPDATE `%s` SET %s WHERE `%s`=?' % (tableName, ', '.join(map(lambda f: '`%s`=?' % (mappings.get(f).name or f), fields)), primaryKey)
+        attrs['__delete__'] = 'DELETE FROM `%s` WHERE `%s`=?' % (tableName, primaryKey)
         return type.__new__(cls, name, bases, attrs)
 
+# base class
 class Model(dict, metaclass=ModelMetaclass):
-
     def __init__(self, **kw):
         super(Model, self).__init__(**kw)
 
@@ -132,45 +161,12 @@ class Model(dict, metaclass=ModelMetaclass):
             field = self.__mappings__[key]
             if field.default is not None:
                 value = field.default() if callable(field.default) else field.default
-                logging.debug('using default value for %s: %s' % (key, str(value)))
+                logging.debug('Using default value for %s: %s' % (key, str(value)))
                 setattr(self, key, value)
         return value
 
-class Model(dict, metaclass=ModelMetaclass):
-    ' 定制类 '
-    def __init__(self, **kw):
-        ' 初始化 '
-        super(Model, self).__init__(**kw)
-
-    def __getattr__(self, key):
-        ' 获取值，如果取不到值抛出异常 '
-        try:
-            return self[key]
-        except KeyError:
-            raise AttributeError(r"'Model' object has no attribute '%s'" % key)
-
-    def __setattr__(self, key, value):
-        ' 根据Key,Value设置值 '
-        self[key] = value
-
-    def getValue(self, key):
-        ' 根据Key获取Value '
-        return getattr(self, key, None)
-
-    def getValueOrDefault(self, key):
-        ' 获取某个属性的值，如果该对象的该属性还没有赋值，就去获取它对应的列的默认值 '
-        value = getattr(self, key, None)
-        if value is None:
-            field = self.__mappings__[key]
-            if field.default is not None:
-                value = field.default() if callable(field.default) else field.default
-                logging.debug('using default value for %s: %s' % (key, str(value)))
-                setattr(self, key, value)
-        return value
-
-    # @classmethod表明该方法是类方法，类方法不需要实例化类就可以被类本身调用，第一个参数必须是cls，cls表示自身类，可以来调用类的属性、类的方法、实例化对象等
-    # cls调用类方法时必须加括号，例如：cls().function()
-    # 不使用@classmethod也可以被类本身调用，前提是方法不传递默认self参数，例如：def function()
+    # class method
+    # use： cls().function()
     @classmethod
     async def findAll(cls, where=None, args=None, **kw):
         ' 根据条件查询 '
@@ -231,17 +227,13 @@ class Model(dict, metaclass=ModelMetaclass):
         return cls(**rs[0])
 
     async def save(self):
-        ' 新增 '
-        # 使用map将每个fields属性传入getValueOrDefault方法，获取值后返回成列表
         args = list(map(self.getValueOrDefault, self.__fields__))
-        # 单独将主键传入getValueOrDefault方法，获取值后拼接
         args.append(self.getValueOrDefault(self.__primary_key__))
-        # 传入插入语句和参数并执行
         rows = await execute(self.__insert__, args)
         if rows == 0:
-            logging.warn('failed to update by primary key: affected rows: %s' % rows)
+            logging.warn('Failed to update by primary key: affected rows: %s' % rows)
         else:
-            logging.info('succeed to update by primary key: affected rows: %s' % rows)
+            logging.info('Succeed to update by primary key: affected rows: %s' % rows)
 
     async def update(self):
         ' 更新 '

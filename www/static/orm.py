@@ -3,7 +3,8 @@ import asyncio
 import aiomysql
 
 def log(sql, args=()):
-    logging.info('SQL: %s %s' % (sql, args))
+    logging.info('SQL: %s' % sql.replace('?', '%s'))
+    logging.info('Args: %s' % args)
 
 # asyncio function, create a public mysql connect pool
 # parm user, password, db, loop must needed
@@ -231,25 +232,23 @@ class Model(dict, metaclass=ModelMetaclass):
         args.append(self.getValueOrDefault(self.__primary_key__))
         rows = await execute(self.__insert__, args)
         if rows == 0:
-            logging.warn('Failed to update by primary key: affected rows: %s' % rows)
+            logging.info('Failed to update by primary key')
         else:
             logging.info('Succeed to update by primary key: affected rows: %s' % rows)
 
     async def update(self):
-        ' 更新 '
         args = list(map(self.getValue, self.__fields__))
         args.append(self.getValue(self.__primary_key__))
         rows = await execute(self.__update__, args)
         if rows == 0:
-            logging.warn('failed to update by primary key: affected rows: %s' % rows)
+            logging.info('Failed to update by primary key')
         else:
-            logging.info('succeed to update by primary key: affected rows: %s' % rows)
+            logging.info('Succeed to update by primary key: affected rows: %s' % rows)
 
     async def remove(self):
-        ' 删除 '
         args = [self.getValue(self.__primary_key__)]
         rows = await execute(self.__delete__, args)
         if rows == 0:
-            logging.warn('failed to update by primary key: affected rows: %s' % rows)
+            logging.info('Failed to update by primary key')
         else:
-            logging.info('succeed to update by primary key: affected rows: %s' % rows)
+            logging.info('Succeed to update by primary key: affected rows: %s' % rows)

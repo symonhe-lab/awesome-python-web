@@ -152,19 +152,28 @@ def add_route(app, fn):
     path = getattr(fn, '__route__', None)
     if path is None or method is None:
         raise ValueError('@get or @post not defined in %s.' % str(fn))
+    # 如果fn既不是协程也不是生成器，强制修饰为协程
     if not asyncio.iscoroutinefunction(fn) and not inspect.isgeneratorfunction(fn):
         fn = asyncio.coroutine(fn)
-    logging.info('Add route %s %s => %s(%s)' % (method, path, fn.__name__, ', '.join(inspect.signature(fn).parameters.keys())))
+    logging.info(' Add route %s %s => %s(%s)' % (method, path, fn.__name__, ', '.join(inspect.signature(fn).parameters.keys())))
+    # 注册为相应的url处理方法
+    # 处理方法为RequestHandler的自省函数'__call__'
     app.router.add_route(method, path, RequestHandler(app, fn))
 
+# 用来自动搜索传入的module_name对应的module的处理函数
 def add_routes(app, module_name):
     n = module_name.rfind('.')
     if n == (-1):
+        # 传入的module_name不包含'.'，则传入的是module名
+        # __import__表示动态加载，这里和下面为什么要用动态加载，单纯的为了加载调用时的'handlers'模块吗？
         mod = __import__(module_name, globals(), locals())
     else:
         name = module_name[n+1:]
         mod = getattr(__import__(module_name[:n], globals(), locals(), [name]), name)
+        # 当module_name为‘'handlers.py'时，好像使用mod = __import__(module_name, globals(), locals())才是对的，不知道教程是什么情况
+    # dir()返回模块的属性列表
     for attr in dir(mod):
+        # 我们没有定义以'_'开头的处理方法
         if attr.startswith('_'):
             continue
         fn = getattr(mod, attr)

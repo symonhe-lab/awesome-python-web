@@ -9,22 +9,31 @@ from jinja2 import Environment, FileSystemLoader
 import orm
 from coroweb import add_routes, add_static
 
+from config import configs
+
+# 初始化jinja2模板
 def init_jinja2(app, **kw):
-    logging.info('init jinja2...')
+    logging.info(' Init jinja2...')
+    # 初始化模板配置，包括模板运行代码的开始和结束标识符，变量的开始结束标识符等
     options = dict(
-        autoescape = kw.get('autoescape', True),
-        block_start_string = kw.get('block_start_string', '{%'),
-        block_end_string = kw.get('block_end_string', '%}'),
-        variable_start_string = kw.get('variable_start_string', '{{'),
-        variable_end_string = kw.get('variable_end_string', '}}'),
-        auto_reload = kw.get('auto_reload', True)
+        autoescape = kw.get('autoescape', True),                        # 自动转义，渲染模板时自动把变量中<>&等字符转换为&lt;&gt;&amp;
+        block_start_string = kw.get('block_start_string', '{%'),        # 运行代码开始标识符
+        block_end_string = kw.get('block_end_string', '%}'),            # 运行代码结束标识符
+        variable_start_string = kw.get('variable_start_string', '{{'),  # 变量开始标识符
+        variable_end_string = kw.get('variable_end_string', '}}'),      # 变量结束标识符
+        auto_reload = kw.get('auto_reload', True)                       # 当模板有修改时，是否重新加载模板
     )
+    # 尝试从参数中获取path信息，即模板文件位置
     path = kw.get('path', None)
+    # 参数中没有路径信息，则默认当前文件目录下的templates目录
     if path is None:
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
-    logging.info('set jinja2 template path: %s' % path)
+    logging.info(' Set jinja2 template path: %s' % path)
+    # Environment是jinja2中的一个核心类，它的实例用来保存配置、全局对象，以及从本地文件系统或其它位置加载模板
     env = Environment(loader=FileSystemLoader(path), **options)
+    # 尝试从参数中获取filters字段
     filters = kw.get('filters', None)
+    # 如果有filters字段，则设置为env的过滤器集合
     if filters is not None:
         for name, f in filters.items():
             env.filters[name] = f
@@ -102,17 +111,32 @@ def datetime_filter(t):
 
 
 async def init(loop):
-    await orm.create_pool(loop=loop, host='127.0.0.1', port=3306, user='root', password='ming123', db='awesome')
+    # 创建数据库连接池，db参数传配置文件里的配置db
+    # await orm.create_pool(loop=loop, host='127.0.0.1', port=3306, user='root', password='ming123', db='awesome')
+    await orm.create_pool(loop=loop, **configs.db)
+    # middlewares设置两个中间处理函数
+    # middlewares处理函数接受两个参数，app和handler，按照顺序执行，前一个函数的handler是后一个函数
+    # middlewares最后一个处理函数的handler会通过routes查找到相应的注册的hander
     app = web.Application(loop=loop, middlewares=[
         logger_factory, response_factory
     ])
+    # 初始化jinja2模板
     init_jinja2(app, filters=dict(datetime=datetime_filter))
+    # 添加请求的handlers，即各请求相对应的处理函数
     add_routes(app, 'handlers')
+    # 添加静态文件所在地址
     add_static(app)
-    srv = await loop.create_server(app.make_handler(), '127.0.0.1', 9000)
-    logging.info('server started at http://127.0.0.1:9000...')
-    return srv
+    # 启动
+    # srv = await loop.create_server(app.make_handler(), '127.0.0.1', 9000)
+    # return srv
+    app_runner = web.AppRunner(app)
+    await app_runner.setup()
+    site = web.TCPSite(app_runner, '127.0.0.1', 9000)
+    logging.info(' Server started at http://127.0.0.1:9000...')
+    await site.start()
 
+# 入口，固定写法
+# 获取eventloop，加入运行事件
 loop = asyncio.get_event_loop()
 loop.run_until_complete(init(loop))
 loop.run_forever()

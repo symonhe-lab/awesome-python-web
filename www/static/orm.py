@@ -9,7 +9,7 @@ def log(sql, args=()):
 # asyncio function, create a public mysql connect pool
 # parm user, password, db, loop must needed
 async def create_pool(loop, **kw):
-    logging.info('create database connection pool...')
+    logging.info(' Create database connection pool...')
     global __pool   # this is a global variable
     __pool = await aiomysql.create_pool(
         host=kw.get('host', 'localhost'),       # host, if don't exist then use localhost

@@ -39,6 +39,14 @@ def post(path):
         return wrapper
     return decorator
 
+# inspect.Parameter.kind:
+# POSITIONAL_ONLY
+# POSITIONAL_OR_KEYWORD
+# VAR_POSITIONAL, 类似参数*args
+# KEYWORD_ONLY
+# VAR_KEYWORD, 类似**kw
+
+# url处理函数需要传入关键字参数，且没有默认参数，获取且返回这些参数名称
 def get_required_kw_args(fn):
     args = []
     params = inspect.signature(fn).parameters
@@ -47,6 +55,7 @@ def get_required_kw_args(fn):
             args.append(name)
     return tuple(args)
 
+# url处理函数需要传入的所有关键字参数，获取且返回这些关键字名称
 def get_named_kw_args(fn):
     args = []
     params = inspect.signature(fn).parameters
@@ -55,18 +64,21 @@ def get_named_kw_args(fn):
             args.append(name)
     return tuple(args)
 
+# url处理函数拥有关键字参数，返回True
 def has_named_kw_args(fn):
     params = inspect.signature(fn).parameters
     for name, param in params.items():
         if param.kind == inspect.Parameter.KEYWORD_ONLY:
             return True
 
+# url处理函数拥有类似于**kw的参数，返回True
 def has_var_kw_arg(fn):
     params = inspect.signature(fn).parameters
     for name, param in params.items():
         if param.kind == inspect.Parameter.VAR_KEYWORD:
             return True
 
+# url处理函数拥有名称为'request'的参数则返回True，否则抛出ValueError，这是必须要求的
 def has_request_arg(fn):
     sig = inspect.signature(fn)
     params = sig.parameters
@@ -79,12 +91,14 @@ def has_request_arg(fn):
             raise ValueError('Request parameter must be the last named parameter in function: %s%s' % (fn.__name__, str(sig)))
     return found
 
+# RequestHandler目的是从url处理函数中分析其需要接收的参数，从request中获取必要的参数，并最终调用url函数
 class RequestHandler(object):
 
     def __init__(self, app, fn):
         self._app = app
         self._func = fn
-        self._has_request_arg = has_request_arg(fn)     # must define func annotation
+        # 检测url处理函数的参数
+        self._has_request_arg = has_request_arg(fn)
         self._has_var_kw_arg = has_var_kw_arg(fn)
         self._has_named_kw_args = has_named_kw_args(fn)
         self._named_kw_args = get_named_kw_args(fn)
@@ -92,7 +106,9 @@ class RequestHandler(object):
 
     async def __call__(self, request):
         kw = None
+        logging.info('Original request: %s' % request)
         if self._has_var_kw_arg or self._has_named_kw_args or self._required_kw_args:
+            # post请求，读取body内容
             if request.method == 'POST':
                 if not request.content_type:
                     return web.HTTPBadRequest('Missing Content-Type.')
@@ -107,8 +123,10 @@ class RequestHandler(object):
                     kw = dict(**params)
                 else:
                     return web.HTTPBadRequest('Unsupported Content-Type: %s' % request.content_type)
+            # get请求，读取url字符串
             if request.method == 'GET':
                 qs = request.query_string
+                logging.info('Qs: %s' % qs)
                 if qs:
                     kw = dict()
                     for k, v in parse.parse_qs(qs, True).items():
@@ -138,6 +156,7 @@ class RequestHandler(object):
         logging.info('Call with args: %s' % str(kw))
         try:
             r = await self._func(**kw)
+            logging.info('Return of caller: %s' % r)
             return r
         except APIError as e:
             return dict(error=e.error, data=e.data, message=e.message)
@@ -155,7 +174,7 @@ def add_route(app, fn):
     # 如果fn既不是协程也不是生成器，强制修饰为协程
     if not asyncio.iscoroutinefunction(fn) and not inspect.isgeneratorfunction(fn):
         fn = asyncio.coroutine(fn)
-    logging.info(' Add route %s %s => %s(%s)' % (method, path, fn.__name__, ', '.join(inspect.signature(fn).parameters.keys())))
+    logging.info('Add route %s %s => %s(%s)' % (method, path, fn.__name__, ', '.join(inspect.signature(fn).parameters.keys())))
     # 注册为相应的url处理方法
     # 处理方法为RequestHandler的自省函数'__call__'
     app.router.add_route(method, path, RequestHandler(app, fn))

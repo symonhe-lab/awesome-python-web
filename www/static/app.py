@@ -11,9 +11,11 @@ from coroweb import add_routes, add_static
 
 from config import configs
 
+from handlers import cookie2user, COOKIE_NAME
+
 # 初始化jinja2模板
 def init_jinja2(app, **kw):
-    logging.info(' Init jinja2...')
+    logging.info('Init jinja2...')
     # 初始化模板配置，包括模板运行代码的开始和结束标识符，变量的开始结束标识符等
     options = dict(
         autoescape = kw.get('autoescape', True),                        # 自动转义，渲染模板时自动把变量中<>&等字符转换为&lt;&gt;&amp;
@@ -28,7 +30,7 @@ def init_jinja2(app, **kw):
     # 参数中没有路径信息，则默认当前文件目录下的templates目录
     if path is None:
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
-    logging.info(' Set jinja2 template path: %s' % path)
+    logging.info('Set jinja2 template path: %s' % path)
     # Environment是jinja2中的一个核心类，它的实例用来保存配置、全局对象，以及从本地文件系统或其它位置加载模板
     env = Environment(loader=FileSystemLoader(path), **options)
     # 尝试从参数中获取filters字段
@@ -41,10 +43,28 @@ def init_jinja2(app, **kw):
 
 async def logger_factory(app, handler):
     async def logger(request):
-        logging.info('Request: %s %s' % (request.method, request.path))
+        logging.info('Request: %s' % (request))
+        logging.info('Request method: %s' % (request.method))
+        logging.info('Request path: %s' % (request.path))
         # await asyncio.sleep(0.3)
         return (await handler(request))
     return logger
+
+# 验证cookie
+async def auth_factory(app, handler):
+    async def auth(request):
+        logging.info('check user: %s %s' % (request.method, request.path))
+        request.__user__ = None
+        cookie_str = request.cookies.get(COOKIE_NAME)
+        if cookie_str:
+            user = await cookie2user(cookie_str)
+            if user:
+                logging.info('set current user: %s' % user.email)
+                request.__user__ = user
+        if request.path.startswith('/manage/') and (request.__user__ is None or not request.__user__.admin):
+            return web.HTTPFound('/signin')
+        return (await handler(request))
+    return auth
 
 async def data_factory(app, handler):
     async def parse_data(request):
@@ -62,6 +82,8 @@ async def response_factory(app, handler):
     async def response(request):
         logging.info('Response handler...')
         r = await handler(request)
+        logging.info('End response handler')
+        logging.info('Return: %s' % r)
         if isinstance(r, web.StreamResponse):
             return r
         if isinstance(r, bytes):
@@ -69,12 +91,14 @@ async def response_factory(app, handler):
             resp.content_type = 'application/octet-stream'
             return resp
         if isinstance(r, str):
+            logging.info('this is str')
             if r.startswith('redirect:'):
                 return web.HTTPFound(r[9:])
             resp = web.Response(body=r.encode('utf-8'))
             resp.content_type = 'text/html;charset=utf-8'
             return resp
         if isinstance(r, dict):
+            logging.info('this is dict')
             template = r.get('__template__')
             if template is None:
                 resp = web.Response(body=json.dumps(r, ensure_ascii=False, default=lambda o: o.__dict__).encode('utf-8'))
@@ -83,6 +107,7 @@ async def response_factory(app, handler):
             else:
                 resp = web.Response(body=app['__templating__'].get_template(template).render(**r).encode('utf-8'))
                 resp.content_type = 'text/html;charset=utf-8'
+                logging.info('resp: %s' % resp)
                 return resp
         if isinstance(r, int) and r >= 100 and r < 600:
             return web.Response(r)
@@ -98,17 +123,20 @@ async def response_factory(app, handler):
 
 def datetime_filter(t):
     delta = int(time.time() - t)
-    if delta < 60:
-        return u'1分钟前'
-    if delta < 3600:
-        return u'%s分钟前' % (delta // 60)
-    if delta < 86400:
-        return u'%s小时前' % (delta // 3600)
-    if delta < 604800:
-        return u'%s天前' % (delta // 86400)
     dt = datetime.fromtimestamp(t)
-    return u'%s年%s月%s日' % (dt.year, dt.month, dt.day)
-
+    return u'%s, %s, %s' % (dt.year, dt.month, dt.day)
+'''
+    if delta < 60:
+        return u'1 minute ago'
+    if delta < 3600:
+        return u'%s minutes ago' % (delta // 60)
+    if delta < 86400:
+        return u'%s hours ago' % (delta // 3600)
+    if delta < 604800:
+        return u'%s days ago' % (delta // 86400)
+    dt = datetime.fromtimestamp(t)
+    return u'%s, %s, %s' % (dt.year, dt.month, dt.day)
+'''
 
 async def init(loop):
     # 创建数据库连接池，db参数传配置文件里的配置db
@@ -118,7 +146,7 @@ async def init(loop):
     # middlewares处理函数接受两个参数，app和handler，按照顺序执行，前一个函数的handler是后一个函数
     # middlewares最后一个处理函数的handler会通过routes查找到相应的注册的hander
     app = web.Application(loop=loop, middlewares=[
-        logger_factory, response_factory
+        logger_factory, auth_factory, response_factory
     ])
     # 初始化jinja2模板
     init_jinja2(app, filters=dict(datetime=datetime_filter))
@@ -132,7 +160,7 @@ async def init(loop):
     app_runner = web.AppRunner(app)
     await app_runner.setup()
     site = web.TCPSite(app_runner, '127.0.0.1', 9000)
-    logging.info(' Server started at http://127.0.0.1:9000...')
+    logging.info('Server started at http://127.0.0.1:9000...')
     await site.start()
 
 # 入口，固定写法

@@ -1,0 +1,21 @@
+{% extends '__base__.html' %}
+
+{% block title %}日志{% endblock %}
+
+{% block content %}
+
+    {% for blog in blogs %}
+    <div>
+        <article class="uk-article">
+            <h4><a class="uk-article-title uk-text-large" href="">{{ blog.name }}</a></h4>
+            <p class="uk-article-meta"><a href="#">Super User</a>, {{ blog.create_at|datetime }}.</p>
+            <p class="uk-text-lead">{{ blog.summary }}</p>
+            <div class="uk-grid-small uk-child-width-auto" uk-grid>
+                <a class="uk-text-meta" href="/blog/{{ blog.id }}">Read more</a>
+            </div>
+        </article>
+        <hr class="uk-article-divider">
+    </div>
+    {% endfor %}
+
+{% endblock %}

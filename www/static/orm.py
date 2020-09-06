@@ -103,7 +103,7 @@ class ModelMetaclass(type):
             return type.__new__(cls, name, bases, attrs)
         # get table name, this is the mysql table name in pointed database, if not this attribute, use class name
         tableName = attrs.get('__table__', None) or name
-        logging.info(' Found model: %s (table: %s)' % (name, tableName))
+        logging.info('Found model: %s (table: %s)' % (name, tableName))
 
         # get all Field and primary key
         mappings = dict()
@@ -111,7 +111,7 @@ class ModelMetaclass(type):
         primaryKey = None
         for k, v in attrs.items():
             if isinstance(v, Field):
-                logging.info(' Found mapping: %s ==> %s' % (k, v))
+                logging.info('Found mapping: %s ==> %s' % (k, v))
                 mappings[k] = v
                 if v.primary_key:
                     # find primary key
